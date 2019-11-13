@@ -11,6 +11,7 @@ import javafx.scene.Group;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.Pane;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.*;
@@ -24,8 +25,11 @@ import org.frcteam2910.common.math.spline.CubicBezierSpline;
 
 import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
 
 public class FieldDisplay extends Pane {
     private static final double ANCHOR_OUTLINE_WIDTH = 0.1;
@@ -36,7 +40,7 @@ public class FieldDisplay extends Pane {
     private static final Color CONTROL_LINE_COLOR = Color.rgb(13, 163, 73);
     private static final double CONTROL_LINE_WIDTH = 0.1;
     private static final Color PATH_COLOR = Color.rgb(107, 82, 148);
-    private static final double PATH_WIDTH = 0.2;
+    private static final double PATH_WIDTH = 0.5;
     private static final double PATH_INITIAL_CONTROL_DISTANCE = 1.0;
 
     @FXML
@@ -105,13 +109,18 @@ public class FieldDisplay extends Pane {
         drawPane.setOnMouseClicked(mouseEvent -> {
             if (mouseEvent.getButton() == MouseButton.SECONDARY) {
                 if (anchorGroup.getChildren().isEmpty()) {
-                    Anchor anchor = new Anchor(PRIMARY_ANCHOR_COLOR, mouseEvent.getX(), mouseEvent.getY(), PRIMARY_ANCHOR_RADIUS);
+                    Anchor anchor = new PrimaryAnchor(mouseEvent.getX(), mouseEvent.getY());
                     anchorGroup.getChildren().add(anchor);
                 } else {
-                    Anchor start = (Anchor) anchorGroup.getChildren().get(anchorGroup.getChildren().size() - 1);
-                    Anchor end = new Anchor(PRIMARY_ANCHOR_COLOR, mouseEvent.getX(), mouseEvent.getY(), PRIMARY_ANCHOR_RADIUS);
+                    PathSection previousSection = null;
+                    if (!sections.isEmpty()) {
+                        previousSection = sections.get(sections.size() - 1);
+                    }
 
-                    sections.add(new PathSection(start, end));
+                    PrimaryAnchor start = (PrimaryAnchor) anchorGroup.getChildren().get(anchorGroup.getChildren().size() - 1);
+                    PrimaryAnchor end = new PrimaryAnchor(mouseEvent.getX(), mouseEvent.getY());
+
+                    sections.add(new PathSection(start, end, previousSection));
                 }
             }
         });
@@ -163,26 +172,21 @@ public class FieldDisplay extends Pane {
                     CubicBezierSpline spline = CubicBezierSpline.convert(s.getSpline());
                     Vector2[] controlPoints = spline.getControlPoints();
 
-                    Anchor startAnchor;
+                    PrimaryAnchor startAnchor;
                     if (sections.isEmpty()) {
-                        startAnchor = new Anchor(
-                                PRIMARY_ANCHOR_COLOR,
-                                controlPoints[0].x,
-                                controlPoints[0].y,
-                                PRIMARY_ANCHOR_RADIUS
-                        );
+                        startAnchor = new PrimaryAnchor(controlPoints[0].x, controlPoints[0].y);
                     } else {
                         startAnchor = sections.get(sections.size() - 1).endAnchor;
                     }
 
-                    Anchor endAnchor = new Anchor(
-                            PRIMARY_ANCHOR_COLOR,
-                            controlPoints[3].x,
-                            controlPoints[3].y,
-                            PRIMARY_ANCHOR_RADIUS
-                    );
+                    PrimaryAnchor endAnchor = new PrimaryAnchor(controlPoints[3].x, controlPoints[3].y);
 
-                    PathSection section = new PathSection(startAnchor, endAnchor);
+                    PathSection lastSection = null;
+                    if (!sections.isEmpty()) {
+                        lastSection = sections.get(sections.size() - 1);
+                    }
+
+                    PathSection section = new PathSection(startAnchor, endAnchor, lastSection);
                     section.controlAnchors[0].setCenter(controlPoints[1]);
                     section.controlAnchors[1].setCenter(controlPoints[2]);
 
@@ -191,13 +195,13 @@ public class FieldDisplay extends Pane {
     }
 
     private static class PathSection extends CubicCurve {
-        public final Anchor startAnchor;
-        public final Anchor endAnchor;
+        public final PrimaryAnchor startAnchor;
+        public final PrimaryAnchor endAnchor;
 
-        public final Anchor[] controlAnchors;
+        public final SecondaryAnchor[] controlAnchors;
         public final ControlLine[] controlLines;
 
-        public PathSection(Anchor startAnchor, Anchor endAnchor) {
+        public PathSection(PrimaryAnchor startAnchor, PrimaryAnchor endAnchor, @Nullable PathSection previousSection) {
             Vector2 start = startAnchor.getCenter();
             Vector2 end = endAnchor.getCenter();
             Vector2 delta = end.subtract(start);
@@ -225,9 +229,15 @@ public class FieldDisplay extends Pane {
 
             this.startAnchor = startAnchor;
             this.endAnchor = endAnchor;
-            controlAnchors = new Anchor[]{
-                    new Anchor(CONTROL_ANCHOR_COLOR, controlX1Property(), controlY1Property(), CONTROL_ANCHOR_RADIUS),
-                    new Anchor(CONTROL_ANCHOR_COLOR, controlX2Property(), controlY2Property(), CONTROL_ANCHOR_RADIUS)
+
+            SecondaryAnchor otherStartControlAnchor = null;
+            if (previousSection != null) {
+                otherStartControlAnchor = previousSection.controlAnchors[1];
+            }
+
+            controlAnchors = new SecondaryAnchor[]{
+                    new SecondaryAnchor(controlX1Property(), controlY1Property(), startAnchor, otherStartControlAnchor),
+                    new SecondaryAnchor(controlX2Property(), controlY2Property(), endAnchor, null)
             };
 
             controlLines = new ControlLine[]{
@@ -285,7 +295,7 @@ public class FieldDisplay extends Pane {
         }
     }
 
-    private static class Anchor extends Circle {
+    private abstract static class Anchor extends Circle {
         public Anchor(Color color, DoubleProperty x, DoubleProperty y, double radius) {
             this(color, x.get(), y.get(), radius);
             x.bind(centerXProperty());
@@ -299,10 +309,12 @@ public class FieldDisplay extends Pane {
             setStrokeWidth(ANCHOR_OUTLINE_WIDTH);
             setStrokeType(StrokeType.OUTSIDE);
 
-            setOnMouseDragged(mouseEvent -> {
-                setCenterX(mouseEvent.getX());
-                setCenterY(mouseEvent.getY());
-            });
+            setOnMouseDragged(this::onMouseDragged);
+        }
+
+        protected void onMouseDragged(MouseEvent event) {
+            setCenterX(event.getX());
+            setCenterY(event.getY());
         }
 
         public Vector2 getCenter() {
@@ -312,6 +324,77 @@ public class FieldDisplay extends Pane {
         public void setCenter(Vector2 center) {
             setCenterX(center.x);
             setCenterY(center.y);
+        }
+    }
+
+    private static class PrimaryAnchor extends Anchor {
+        private List<SecondaryAnchor> secondaryAnchors = new ArrayList<>();
+
+        public PrimaryAnchor(DoubleProperty x, DoubleProperty y) {
+            super(PRIMARY_ANCHOR_COLOR, x, y, PRIMARY_ANCHOR_RADIUS);
+        }
+
+        public PrimaryAnchor(double x, double y) {
+            super(PRIMARY_ANCHOR_COLOR, x, y, PRIMARY_ANCHOR_RADIUS);
+        }
+
+        @Override
+        protected void onMouseDragged(MouseEvent event) {
+            Vector2[] deltas = new Vector2[secondaryAnchors.size()];
+            for (int i = 0; i < deltas.length; i++) {
+                deltas[i] = secondaryAnchors.get(i).getCenter().subtract(getCenter());
+            }
+
+            super.onMouseDragged(event);
+
+            for (int i = 0; i < deltas.length; i++) {
+                SecondaryAnchor anchor = secondaryAnchors.get(i);
+                anchor.setCenter(getCenter().add(deltas[i]));
+            }
+        }
+
+        public void addSecondaryAnchor(SecondaryAnchor anchor) {
+            secondaryAnchors.add(anchor);
+        }
+    }
+
+    private static class SecondaryAnchor extends Anchor {
+        private final PrimaryAnchor primaryAnchor;
+        @Nullable
+        private SecondaryAnchor otherSecondaryAnchor;
+
+        public SecondaryAnchor(DoubleProperty x, DoubleProperty y, PrimaryAnchor primaryAnchor,
+                               @Nullable SecondaryAnchor otherSecondaryAnchor) {
+            super(CONTROL_ANCHOR_COLOR, x, y, CONTROL_ANCHOR_RADIUS);
+            this.primaryAnchor = primaryAnchor;
+            primaryAnchor.addSecondaryAnchor(this);
+            this.otherSecondaryAnchor = otherSecondaryAnchor;
+            if (otherSecondaryAnchor != null) {
+                otherSecondaryAnchor.setOtherSecondaryAnchor(this);
+
+                Vector2 otherDelta = primaryAnchor.getCenter().subtract(otherSecondaryAnchor.getCenter());
+                setCenter(Vector2.fromAngle(otherDelta.getAngle()).scale(PATH_INITIAL_CONTROL_DISTANCE).add(primaryAnchor.getCenter()));
+            }
+        }
+
+        @Override
+        protected void onMouseDragged(MouseEvent event) {
+            super.onMouseDragged(event);
+
+            if (otherSecondaryAnchor == null) {
+                return;
+            }
+
+            // Make sure the position of the other secondary anchor is always 180 off of this anchor
+            Vector2 thisDelta = primaryAnchor.getCenter().subtract(getCenter());
+            Vector2 otherDelta = primaryAnchor.getCenter().subtract(otherSecondaryAnchor.getCenter());
+
+            otherDelta = Vector2.fromAngle(thisDelta.getAngle()).scale(otherDelta.length);
+            otherSecondaryAnchor.setCenter(otherDelta.add(primaryAnchor.getCenter()));
+        }
+
+        public void setOtherSecondaryAnchor(@Nullable SecondaryAnchor otherSecondaryAnchor) {
+            this.otherSecondaryAnchor = otherSecondaryAnchor;
         }
     }
 }
