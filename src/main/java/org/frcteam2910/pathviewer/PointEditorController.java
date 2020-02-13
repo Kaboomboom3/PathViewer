@@ -3,12 +3,11 @@ package org.frcteam2910.pathviewer;
 
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
-import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
-import javafx.scene.control.Button;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextFormatter;
 import javafx.util.converter.DoubleStringConverter;
+import javafx.util.converter.NumberStringConverter;
 
 public class PointEditorController {
     @FXML
@@ -17,8 +16,6 @@ public class PointEditorController {
     private TextField txtY;
     @FXML
     private TextField txtRotationField;
-    @FXML
-    private Button btnUpdate;
 
     @FXML
     private void initialize() {
@@ -27,22 +24,30 @@ public class PointEditorController {
         txtRotationField.setTextFormatter(new TextFormatter<>(new DoubleStringConverter()));
 
         fieldPointProperty().addListener((observable, oldValue, newValue) -> {
+            if (oldValue != null) {
+                txtX.textProperty().unbindBidirectional(oldValue.centerXProperty());
+                txtY.textProperty().unbindBidirectional(oldValue.centerYProperty());
+                txtRotationField.textProperty().unbindBidirectional(oldValue.rotateProperty());
+                txtX.setDisable(true);
+                txtY.setDisable(true);
+                txtRotationField.setDisable(true);
+                txtX.clear();
+                txtY.clear();
+                txtRotationField.clear();
+            }
+
             if(newValue != null) {
-                txtX.setText(String.valueOf(newValue.getCenterX()));
-                txtY.setText(String.valueOf(newValue.getCenterY()));
-                txtRotationField.setText(String.valueOf(newValue.getRotate()));
+                txtX.textProperty().bindBidirectional(newValue.centerXProperty(), new NumberStringConverter());
+                txtY.textProperty().bindBidirectional(newValue.centerYProperty(), new NumberStringConverter());
+                txtX.setDisable(false);
+                txtY.setDisable(false);
+
+                if (newValue instanceof FieldPrimaryControlPoint) {
+                    txtRotationField.textProperty().bindBidirectional(newValue.rotateProperty(), new NumberStringConverter());
+                    txtRotationField.setDisable(false);
+                }
             }
         });
-    }
-
-    @FXML
-    private void updateValues(ActionEvent actionEvent) {
-        if(getFieldPoint() == null) {
-            return;
-        }
-
-        getFieldPoint().setCenter(Double.parseDouble(txtX.getText()), Double.parseDouble(txtY.getText()));
-        getFieldPoint().setRotate(Double.parseDouble(txtRotationField.getText()));
     }
 
     private final SimpleObjectProperty<FieldPoint> fieldPoint = new SimpleObjectProperty<>();
